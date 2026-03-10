@@ -1,0 +1,101 @@
+name: Build PPT 병합기
+
+on:
+  push:
+    tags:
+      - 'v*'          # v1.0, v1.1 등 태그 푸시 시 자동 빌드
+  workflow_dispatch:  # 수동 실행 버튼
+
+jobs:
+  # ── macOS 빌드 ──────────────────────────────────────────────────
+  build-mac:
+    runs-on: macos-latest
+    steps:
+      - name: 코드 체크아웃
+        uses: actions/checkout@v4
+
+      - name: Python 설치
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      - name: 패키지 설치
+        run: pip install PySide6 python-pptx lxml pyinstaller
+
+      - name: PyInstaller 빌드
+        run: pyinstaller PPTMerger.spec
+
+      - name: DMG 생성
+        run: |
+          hdiutil create -volname "PPT병합기" \
+            -srcfolder "dist/PPT병합기.app" \
+            -ov -format UDZO \
+            "dist/PPT병합기_mac.dmg"
+
+      - name: 아티팩트 업로드
+        uses: actions/upload-artifact@v4
+        with:
+          name: PPT병합기-mac
+          path: dist/PPT병합기_mac.dmg
+
+  # ── Windows 빌드 ────────────────────────────────────────────────
+  build-windows:
+    runs-on: windows-latest
+    steps:
+      - name: 코드 체크아웃
+        uses: actions/checkout@v4
+
+      - name: Python 설치
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      - name: 패키지 설치
+        run: pip install PySide6 python-pptx lxml pyinstaller
+
+      - name: PyInstaller 빌드
+        run: pyinstaller PPTMerger.spec
+
+      - name: 아티팩트 업로드
+        uses: actions/upload-artifact@v4
+        with:
+          name: PPT병합기-windows
+          path: dist/PPT병합기.exe
+
+  # ── 릴리즈 생성 (태그 푸시 시) ──────────────────────────────────
+  release:
+    needs: [build-mac, build-windows]
+    runs-on: ubuntu-latest
+    if: startsWith(github.ref, 'refs/tags/')
+    permissions:
+      contents: write
+    steps:
+      - name: Mac 아티팩트 다운로드
+        uses: actions/download-artifact@v4
+        with:
+          name: PPT병합기-mac
+          path: artifacts
+
+      - name: Windows 아티팩트 다운로드
+        uses: actions/download-artifact@v4
+        with:
+          name: PPT병합기-windows
+          path: artifacts
+
+      - name: GitHub 릴리즈 생성
+        uses: softprops/action-gh-release@v2
+        with:
+          name: "PPT 병합기 ${{ github.ref_name }}"
+          body: |
+            ## PPT 병합기 ${{ github.ref_name }}
+
+            ### 다운로드
+            - **macOS**: `PPT병합기_mac.dmg`
+            - **Windows**: `PPT병합기.exe`
+
+            ### 사용 방법
+            - PPT / PPTX 파일을 드래그 앤 드롭
+            - 순서 조정 후 병합 버튼 클릭
+          files: |
+            artifacts/PPT병합기_mac.dmg
+            artifacts/PPT병합기.exe
