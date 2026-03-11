@@ -20,6 +20,7 @@ A dedicated Python-based GUI tool for merging multiple PowerPoint presentations 
 ## 📸 Preview
 
 > _Dark-themed modern UI with drag-and-drop support_
+<img width="681" height="611" alt="image" src="https://github.com/user-attachments/assets/744533ae-13ab-4f47-a89b-1dcca0b2f63f" />
 
 ---
 
