@@ -330,12 +330,20 @@ class PPTMergerApp(QWidget):
         return result
 
     # ── 슬라이드 복사 ──────────────────────────────────────────────
-    _MEDIA_RELTYPES = {
-        'http://schemas.openxmlformats.org/officeDocument/2006/relationships/image',
-        'http://schemas.openxmlformats.org/officeDocument/2006/relationships/media',
-        'http://schemas.openxmlformats.org/officeDocument/2006/relationships/audio',
-        'http://schemas.openxmlformats.org/officeDocument/2006/relationships/video',
+    # python-pptx 가 자체 관리하는 관계 타입 — 직접 복사하면 충돌
+    _SKIP_RELTYPES = {
+        'http://schemas.openxmlformats.org/officeDocument/2006/relationships/slideLayout',
+        'http://schemas.openxmlformats.org/officeDocument/2006/relationships/notesSlide',
+        'http://schemas.openxmlformats.org/officeDocument/2006/relationships/slide',
     }
+
+    @staticmethod
+    def _remap_xml(xml: str, rId_map: dict) -> str:
+        for old, new in rId_map.items():
+            xml = xml.replace(f'r:embed="{old}"', f'r:embed="{new}"')
+            xml = xml.replace(f'r:id="{old}"',    f'r:id="{new}"')
+            xml = xml.replace(f'r:link="{old}"',  f'r:link="{new}"')
+        return xml
 
     def _copy_slide(self, dest_prs, src_slide):
         blank = dest_prs.slide_layouts[min(6, len(dest_prs.slide_layouts) - 1)]
@@ -343,14 +351,18 @@ class PPTMergerApp(QWidget):
 
         rId_map = {}
         for rel_id, rel in src_slide.part.rels.items():
+            if rel.reltype in self._SKIP_RELTYPES:
+                continue
             if rel.is_external:
                 try:
-                    rId_map[rel_id] = dest_slide.part.relate_to(rel.target_ref, rel.reltype, is_external=True)
+                    rId_map[rel_id] = dest_slide.part.relate_to(
+                        rel.target_ref, rel.reltype, is_external=True)
                 except Exception:
                     pass
-            elif rel.reltype in self._MEDIA_RELTYPES:
+            else:
                 try:
-                    rId_map[rel_id] = dest_slide.part.relate_to(rel.target_part, rel.reltype)
+                    rId_map[rel_id] = dest_slide.part.relate_to(
+                        rel.target_part, rel.reltype)
                 except Exception:
                     pass
 
@@ -363,10 +375,7 @@ class PPTMergerApp(QWidget):
 
         if rId_map:
             xml = etree.tostring(dest_tree, encoding='unicode')
-            for old, new in rId_map.items():
-                xml = xml.replace(f'r:embed="{old}"', f'r:embed="{new}"')
-                xml = xml.replace(f'r:id="{old}"',    f'r:id="{new}"')
-                xml = xml.replace(f'r:link="{old}"',  f'r:link="{new}"')
+            xml = self._remap_xml(xml, rId_map)
             new_tree = etree.fromstring(xml)
             dest_tree.getparent().replace(dest_tree, new_tree)
 
@@ -381,7 +390,13 @@ class PPTMergerApp(QWidget):
                 dest_bg = dest_cSld.find(f'{{{ns}}}bg')
                 if dest_bg is not None:
                     dest_cSld.remove(dest_bg)
-                dest_cSld.insert(0, copy.deepcopy(src_bg))
+                bg_copy = copy.deepcopy(src_bg)
+                # 배경 이미지 rId 도 리매핑
+                if rId_map:
+                    bg_xml = etree.tostring(bg_copy, encoding='unicode')
+                    bg_xml = self._remap_xml(bg_xml, rId_map)
+                    bg_copy = etree.fromstring(bg_xml)
+                dest_cSld.insert(0, bg_copy)
 
     def _add_black_slide(self, prs):
         slide = prs.slides.add_slide(prs.slide_layouts[min(6, len(prs.slide_layouts) - 1)])
