@@ -4,11 +4,21 @@ import sys, os
 block_cipher = None
 APP_NAME = 'PPT병합기'
 
+# ── macOS: LibreOffice.app 번들 포함 ─────────────────────────────
+extra_datas = []
+if sys.platform == 'darwin':
+    lo_app = '/Applications/LibreOffice.app'
+    if os.path.exists(lo_app):
+        extra_datas = [(lo_app, 'LibreOffice.app')]
+        print(f"[번들] LibreOffice.app 포함: {lo_app}")
+    else:
+        print("⚠️  /Applications/LibreOffice.app 없음 — .ppt 변환 기능 미포함")
+
 a = Analysis(
     ['mergeppt.py'],
     pathex=[],
     binaries=[],
-    datas=[],
+    datas=extra_datas,
     hiddenimports=[
         'PySide6.QtWidgets',
         'PySide6.QtCore',
@@ -39,13 +49,13 @@ if sys.platform == 'darwin':
         debug=False,
         bootloader_ignore_signals=False,
         strip=False,
-        upx=True,
+        upx=False,          # LibreOffice 바이너리는 UPX 압축 불필요
         console=False,
         icon='icon.icns' if os.path.exists('icon.icns') else None,
     )
     coll = COLLECT(
         exe, a.binaries, a.zipfiles, a.datas,
-        strip=False, upx=True,
+        strip=False, upx=False,
         name=APP_NAME,
     )
     app = BUNDLE(
@@ -59,7 +69,7 @@ if sys.platform == 'darwin':
             'CFBundleVersion': '1.0.0',
             'CFBundleDisplayName': APP_NAME,
             'LSMinimumSystemVersion': '11.0',
-            'NSRequiresAquaSystemAppearance': False,  # 다크모드 지원
+            'NSRequiresAquaSystemAppearance': False,
         },
     )
 

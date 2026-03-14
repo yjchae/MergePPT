@@ -125,7 +125,7 @@ class PPTMergerApp(QWidget):
         self.initUI()
 
     def initUI(self):
-        self.setWindowTitle('PPT 병합기')
+        self.setWindowTitle('PPT 병합기 ')
         self.resize(680, 580)
         self.setAcceptDrops(True)
         self.setStyleSheet("background-color: #1e1e2e;")
@@ -209,17 +209,6 @@ class PPTMergerApp(QWidget):
 
         root.addLayout(btn_row)
 
-        # 푸터
-        footer = QLabel("v1.0  ·  Made by @ZionP")
-        footer.setAlignment(Qt.AlignRight)
-        footer.setStyleSheet("""
-            color: #3a3a55;
-            font-size: 11px;
-            letter-spacing: 0.5px;
-            padding-right: 2px;
-        """)
-        root.addWidget(footer)
-
     # ── 드래그앤 드롭 ──────────────────────────────────────────────
     def dragEnterEvent(self, event):
         if event.mimeData().hasUrls():
@@ -290,6 +279,7 @@ class PPTMergerApp(QWidget):
     # ── .ppt → .pptx 변환 ─────────────────────────────────────────
     @staticmethod
     def _get_soffice():
+        import shutil
         if getattr(sys, 'frozen', False):
             base = sys._MEIPASS
             if sys.platform == 'darwin':
@@ -297,21 +287,58 @@ class PPTMergerApp(QWidget):
             else:
                 return os.path.join(base, 'LibreOffice', 'program', 'soffice.exe')
         if sys.platform == 'darwin':
-            return '/Applications/LibreOffice.app/Contents/MacOS/soffice'
-        for p in [r'C:\Program Files\LibreOffice\program\soffice.exe',
-                  r'C:\Program Files (x86)\LibreOffice\program\soffice.exe']:
-            if os.path.exists(p):
-                return p
-        return 'soffice'
+            p = '/Applications/LibreOffice.app/Contents/MacOS/soffice'
+            return p if os.path.exists(p) else (shutil.which('soffice') or p)
+        if sys.platform == 'win32':
+            # 표준 설치 경로
+            candidates = [
+                r'C:\Program Files\LibreOffice\program\soffice.exe',
+                r'C:\Program Files (x86)\LibreOffice\program\soffice.exe',
+            ]
+            # 레지스트리에서 설치 경로 탐색
+            try:
+                import winreg
+                for root in (winreg.HKEY_LOCAL_MACHINE, winreg.HKEY_CURRENT_USER):
+                    for sub in (r'SOFTWARE\LibreOffice\LibreOffice',
+                                r'SOFTWARE\WOW6432Node\LibreOffice\LibreOffice'):
+                        try:
+                            key = winreg.OpenKey(root, sub)
+                            idx = 0
+                            while True:
+                                try:
+                                    ver = winreg.EnumKey(key, idx)
+                                    vkey = winreg.OpenKey(key, ver)
+                                    path, _ = winreg.QueryValueEx(vkey, 'Path')
+                                    candidates.append(os.path.join(path, 'program', 'soffice.exe'))
+                                    idx += 1
+                                except OSError:
+                                    break
+                        except OSError:
+                            pass
+            except Exception:
+                pass
+            for p in candidates:
+                if os.path.exists(p):
+                    return p
+            # PATH에서 탐색
+            found = shutil.which('soffice') or shutil.which('soffice.exe')
+            if found:
+                return found
+            return None
+        found = shutil.which('soffice')
+        return found or 'soffice'
 
     def _convert_ppt_files(self, file_paths, tmp_dir):
         ppt_files = [p for p in file_paths if p.lower().endswith('.ppt')]
         if ppt_files:
             soffice = self._get_soffice()
-            if not os.path.exists(soffice):
+            if not soffice or not os.path.isfile(soffice):
                 raise FileNotFoundError(
-                    f"LibreOffice를 찾을 수 없습니다.\n경로: {soffice}\n"
-                    "LibreOffice를 설치한 뒤 다시 시도해주세요."
+                    "LibreOffice를 찾을 수 없습니다.\n"
+                    "LibreOffice를 설치한 뒤 다시 시도해주세요.\n"
+                    "(https://www.libreoffice.org/download/libreoffice-fresh/)\n\n"
+                    "설치 후에도 이 오류가 발생하면 LibreOffice 설치 경로의 'program' 폴더가\n"
+                    "시스템 PATH에 등록되어 있는지 확인해주세요."
                 )
             kwargs = {}
             if sys.platform == 'win32':
@@ -330,20 +357,12 @@ class PPTMergerApp(QWidget):
         return result
 
     # ── 슬라이드 복사 ──────────────────────────────────────────────
-    # python-pptx 가 자체 관리하는 관계 타입 — 직접 복사하면 충돌
-    _SKIP_RELTYPES = {
-        'http://schemas.openxmlformats.org/officeDocument/2006/relationships/slideLayout',
-        'http://schemas.openxmlformats.org/officeDocument/2006/relationships/notesSlide',
-        'http://schemas.openxmlformats.org/officeDocument/2006/relationships/slide',
+    _MEDIA_RELTYPES = {
+        'http://schemas.openxmlformats.org/officeDocument/2006/relationships/image',
+        'http://schemas.openxmlformats.org/officeDocument/2006/relationships/media',
+        'http://schemas.openxmlformats.org/officeDocument/2006/relationships/audio',
+        'http://schemas.openxmlformats.org/officeDocument/2006/relationships/video',
     }
-
-    @staticmethod
-    def _remap_xml(xml: str, rId_map: dict) -> str:
-        for old, new in rId_map.items():
-            xml = xml.replace(f'r:embed="{old}"', f'r:embed="{new}"')
-            xml = xml.replace(f'r:id="{old}"',    f'r:id="{new}"')
-            xml = xml.replace(f'r:link="{old}"',  f'r:link="{new}"')
-        return xml
 
     def _copy_slide(self, dest_prs, src_slide):
         blank = dest_prs.slide_layouts[min(6, len(dest_prs.slide_layouts) - 1)]
@@ -351,18 +370,14 @@ class PPTMergerApp(QWidget):
 
         rId_map = {}
         for rel_id, rel in src_slide.part.rels.items():
-            if rel.reltype in self._SKIP_RELTYPES:
-                continue
             if rel.is_external:
                 try:
-                    rId_map[rel_id] = dest_slide.part.relate_to(
-                        rel.target_ref, rel.reltype, is_external=True)
+                    rId_map[rel_id] = dest_slide.part.relate_to(rel.target_ref, rel.reltype, is_external=True)
                 except Exception:
                     pass
-            else:
+            elif rel.reltype in self._MEDIA_RELTYPES:
                 try:
-                    rId_map[rel_id] = dest_slide.part.relate_to(
-                        rel.target_part, rel.reltype)
+                    rId_map[rel_id] = dest_slide.part.relate_to(rel.target_part, rel.reltype)
                 except Exception:
                     pass
 
@@ -375,7 +390,10 @@ class PPTMergerApp(QWidget):
 
         if rId_map:
             xml = etree.tostring(dest_tree, encoding='unicode')
-            xml = self._remap_xml(xml, rId_map)
+            for old, new in rId_map.items():
+                xml = xml.replace(f'r:embed="{old}"', f'r:embed="{new}"')
+                xml = xml.replace(f'r:id="{old}"',    f'r:id="{new}"')
+                xml = xml.replace(f'r:link="{old}"',  f'r:link="{new}"')
             new_tree = etree.fromstring(xml)
             dest_tree.getparent().replace(dest_tree, new_tree)
 
@@ -390,13 +408,7 @@ class PPTMergerApp(QWidget):
                 dest_bg = dest_cSld.find(f'{{{ns}}}bg')
                 if dest_bg is not None:
                     dest_cSld.remove(dest_bg)
-                bg_copy = copy.deepcopy(src_bg)
-                # 배경 이미지 rId 도 리매핑
-                if rId_map:
-                    bg_xml = etree.tostring(bg_copy, encoding='unicode')
-                    bg_xml = self._remap_xml(bg_xml, rId_map)
-                    bg_copy = etree.fromstring(bg_xml)
-                dest_cSld.insert(0, bg_copy)
+                dest_cSld.insert(0, copy.deepcopy(src_bg))
 
     def _add_black_slide(self, prs):
         slide = prs.slides.add_slide(prs.slide_layouts[min(6, len(prs.slide_layouts) - 1)])

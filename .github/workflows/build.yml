@@ -22,7 +22,42 @@ jobs:
       - name: 패키지 설치
         run: pip install PySide6 python-pptx lxml pyinstaller
 
-      - name: PyInstaller 빌드
+      - name: LibreOffice 최신 버전 확인
+        id: lo_version
+        run: |
+          LO_VER=$(curl -s https://download.documentfoundation.org/libreoffice/stable/ \
+            | grep -oE '[0-9]+\.[0-9]+\.[0-9]+/' | sort -V | tail -1 | tr -d '/')
+          echo "version=$LO_VER" >> $GITHUB_OUTPUT
+          echo "LibreOffice 버전: $LO_VER"
+
+      - name: LibreOffice 캐시 복원
+        id: lo_cache
+        uses: actions/cache@v4
+        with:
+          path: /Applications/LibreOffice.app
+          key: libreoffice-mac-${{ runner.arch }}-${{ steps.lo_version.outputs.version }}
+
+      - name: LibreOffice 다운로드 및 설치
+        if: steps.lo_cache.outputs.cache-hit != 'true'
+        run: |
+          LO_VER="${{ steps.lo_version.outputs.version }}"
+          ARCH=$(uname -m)
+          if [ "$ARCH" = "arm64" ]; then
+            URL_ARCH="aarch64"
+          else
+            URL_ARCH="x86_64"
+          fi
+          LO_FILE="LibreOffice_${LO_VER}_MacOS_${URL_ARCH}.dmg"
+          LO_URL="https://download.documentfoundation.org/libreoffice/stable/${LO_VER}/mac/${URL_ARCH}/${LO_FILE}"
+          echo "다운로드: $LO_URL"
+          curl -L -o "/tmp/${LO_FILE}" "$LO_URL"
+          hdiutil attach "/tmp/${LO_FILE}" -mountpoint /Volumes/LibreOffice -nobrowse -quiet
+          cp -R "/Volumes/LibreOffice/LibreOffice.app" /Applications/
+          hdiutil detach /Volumes/LibreOffice -quiet
+          rm "/tmp/${LO_FILE}"
+          echo "✅ LibreOffice 설치 완료"
+
+      - name: PyInstaller 빌드 (LibreOffice 번들 포함)
         run: pyinstaller PPTMerger.spec
 
       - name: DMG 생성
@@ -53,14 +88,49 @@ jobs:
       - name: 패키지 설치
         run: pip install PySide6 python-pptx lxml pyinstaller
 
+      - name: LibreOffice 최신 버전 확인
+        id: lo_version
+        shell: powershell
+        run: |
+          $links = (Invoke-WebRequest 'https://download.documentfoundation.org/libreoffice/stable/' -UseBasicParsing).Links.href
+          $ver = $links | Where-Object { $_ -match '^\d+\.\d+\.\d+/$' } | Sort-Object -Descending | Select-Object -First 1
+          $ver = $ver.TrimEnd('/')
+          echo "version=$ver" >> $env:GITHUB_OUTPUT
+          Write-Host "LibreOffice 버전: $ver"
+
+      - name: LibreOffice MSI 캐시 복원
+        id: lo_cache
+        uses: actions/cache@v4
+        with:
+          path: deps\LibreOffice_Win_x86-64.msi
+          key: libreoffice-win-x86_64-${{ steps.lo_version.outputs.version }}
+
+      - name: LibreOffice MSI 다운로드
+        if: steps.lo_cache.outputs.cache-hit != 'true'
+        shell: powershell
+        run: |
+          $ver = "${{ steps.lo_version.outputs.version }}"
+          $url = "https://download.documentfoundation.org/libreoffice/stable/$ver/win/x86_64/LibreOffice_${ver}_Win_x86-64.msi"
+          Write-Host "다운로드: $url"
+          New-Item -ItemType Directory -Force -Path deps | Out-Null
+          Invoke-WebRequest -Uri $url -OutFile "deps\LibreOffice_Win_x86-64.msi" -UseBasicParsing
+          Write-Host "✅ LibreOffice MSI 다운로드 완료"
+
+      - name: Inno Setup 설치
+        run: choco install innosetup -y --no-progress
+
       - name: PyInstaller 빌드
         run: pyinstaller PPTMerger.spec
+
+      - name: Inno Setup 설치 파일 생성
+        run: |
+          & "C:\Program Files (x86)\Inno Setup 6\ISCC.exe" installer.iss
 
       - name: 아티팩트 업로드
         uses: actions/upload-artifact@v4
         with:
           name: PPT병합기-windows
-          path: dist/PPT병합기.exe
+          path: dist/PPT병합기_Setup_v1.0.exe
 
   # ── 릴리즈 생성 (태그 푸시 시) ──────────────────────────────────
   release:
@@ -87,7 +157,7 @@ jobs:
         with:
           name: "PPT 병합기 ${{ github.ref_name }}"
           body: |
-            ## 🎉 PPT 병합기 첫 번째 릴리즈
+            ## 🎉 PPT 병합기 ${{ github.ref_name }}
 
             여러 개의 PPT / PPTX 파일을 하나로 합쳐주는 데스크톱 프로그램입니다.
 
@@ -109,9 +179,9 @@ jobs:
             | 운영체제 | 파일 | 방법 |
             |----------|------|------|
             | macOS | `PPT병합기_mac.dmg` | DMG 열고 앱 실행 |
-            | Windows | `PPT병합기.exe` | EXE 파일 바로 실행 |
+            | Windows | `PPT병합기_Setup_v1.0.exe` | 설치 파일 실행 |
 
-            > ⚠️ `.ppt` 파일 변환 기능을 사용하려면 [LibreOffice](https://www.libreoffice.org/) 설치가 필요합니다.
+            > LibreOffice가 포함되어 있어 별도 설치 없이 `.ppt` 변환을 사용할 수 있습니다.
           files: |
             artifacts/PPT병합기_mac.dmg
-            artifacts/PPT병합기.exe
+            artifacts/PPT병합기_Setup_v1.0.exe
