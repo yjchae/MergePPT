@@ -90,13 +90,13 @@ jobs:
 
       - name: LibreOffice 최신 버전 확인
         id: lo_version
-        shell: powershell
+        shell: pwsh
         run: |
           $links = (Invoke-WebRequest 'https://download.documentfoundation.org/libreoffice/stable/' -UseBasicParsing).Links.href
           $ver = $links | Where-Object { $_ -match '^\d+\.\d+\.\d+/$' } | Sort-Object -Descending | Select-Object -First 1
           $ver = $ver.TrimEnd('/')
           echo "version=$ver" >> $env:GITHUB_OUTPUT
-          Write-Host "LibreOffice 버전: $ver"
+          Write-Host "LibreOffice version: $ver"
 
       - name: LibreOffice MSI 캐시 복원
         id: lo_cache
@@ -107,11 +107,11 @@ jobs:
 
       - name: LibreOffice MSI 다운로드
         if: steps.lo_cache.outputs.cache-hit != 'true'
-        shell: powershell
+        shell: pwsh
         run: |
           $ver = "${{ steps.lo_version.outputs.version }}"
           $url = "https://download.documentfoundation.org/libreoffice/stable/$ver/win/x86_64/LibreOffice_${ver}_Win_x86-64.msi"
-          Write-Host "다운로드: $url"
+          Write-Host "Downloading: $url"
           New-Item -ItemType Directory -Force -Path deps | Out-Null
           Invoke-WebRequest -Uri $url -OutFile "deps\LibreOffice_Win_x86-64.msi" -UseBasicParsing
           Write-Host "LibreOffice MSI download complete"
