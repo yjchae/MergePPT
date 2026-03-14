@@ -114,7 +114,7 @@ jobs:
           Write-Host "다운로드: $url"
           New-Item -ItemType Directory -Force -Path deps | Out-Null
           Invoke-WebRequest -Uri $url -OutFile "deps\LibreOffice_Win_x86-64.msi" -UseBasicParsing
-          Write-Host "✅ LibreOffice MSI 다운로드 완료"
+          Write-Host "LibreOffice MSI download complete"
 
       - name: Inno Setup 설치
         run: choco install innosetup -y --no-progress
