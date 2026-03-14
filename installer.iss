@@ -14,7 +14,9 @@ Compression=lzma2
 SolidCompression=yes
 PrivilegesRequired=admin
 WizardStyle=modern
+#if FileExists("icon.ico")
 SetupIconFile=icon.ico
+#endif
 UninstallDisplayIcon={app}\{#AppExeName}
 ArchitecturesInstallIn64BitMode=x64compatible
 

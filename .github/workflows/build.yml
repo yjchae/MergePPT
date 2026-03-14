@@ -3,8 +3,8 @@ name: Build PPT 병합기
 on:
   push:
     tags:
-      - 'v*'          # v1.0, v1.1 등 태그 푸시 시 자동 빌드
-  workflow_dispatch:  # 수동 실행 버튼
+      - 'v*'
+  workflow_dispatch:
 
 jobs:
   # ── macOS 빌드 ──────────────────────────────────────────────────
@@ -28,7 +28,7 @@ jobs:
           LO_VER=$(curl -s https://download.documentfoundation.org/libreoffice/stable/ \
             | grep -oE '[0-9]+\.[0-9]+\.[0-9]+/' | sort -V | tail -1 | tr -d '/')
           echo "version=$LO_VER" >> $GITHUB_OUTPUT
-          echo "LibreOffice 버전: $LO_VER"
+          echo "LibreOffice version: $LO_VER"
 
       - name: LibreOffice 캐시 복원
         id: lo_cache
@@ -49,13 +49,12 @@ jobs:
           fi
           LO_FILE="LibreOffice_${LO_VER}_MacOS_${URL_ARCH}.dmg"
           LO_URL="https://download.documentfoundation.org/libreoffice/stable/${LO_VER}/mac/${URL_ARCH}/${LO_FILE}"
-          echo "다운로드: $LO_URL"
+          echo "Downloading: $LO_URL"
           curl -L -o "/tmp/${LO_FILE}" "$LO_URL"
           hdiutil attach "/tmp/${LO_FILE}" -mountpoint /Volumes/LibreOffice -nobrowse -quiet
           cp -R "/Volumes/LibreOffice/LibreOffice.app" /Applications/
           hdiutil detach /Volumes/LibreOffice -quiet
           rm "/tmp/${LO_FILE}"
-          echo "✅ LibreOffice 설치 완료"
 
       - name: PyInstaller 빌드 (LibreOffice 번들 포함)
         run: pyinstaller PPTMerger.spec
@@ -157,24 +156,24 @@ jobs:
         with:
           name: "PPT 병합기 ${{ github.ref_name }}"
           body: |
-            ## 🎉 PPT 병합기 ${{ github.ref_name }}
+            ## PPT 병합기 ${{ github.ref_name }}
 
             여러 개의 PPT / PPTX 파일을 하나로 합쳐주는 데스크톱 프로그램입니다.
 
             ---
 
-            ### ✨ 주요 기능
+            ### 주요 기능
 
-            - **PPT / PPTX 모두 지원** — 구버전 `.ppt` 파일도 자동 변환 후 병합
-            - **드래그 앤 드롭** — 파일을 창에 끌어다 놓으면 바로 추가
-            - **순서 자유롭게 변경** — 목록에서 드래그로 순서 조정
-            - **개별 삭제** — 각 항목 우측 ✕ 버튼으로 삭제
-            - **구분 슬라이드 자동 삽입** — 파일과 파일 사이에 검정 슬라이드 자동 추가
-            - **저장 위치 직접 선택** — 병합 시 원하는 경로에 저장
+            - **PPT / PPTX 모두 지원** - 구버전 `.ppt` 파일도 자동 변환 후 병합
+            - **드래그 앤 드롭** - 파일을 창에 끌어다 놓으면 바로 추가
+            - **순서 자유롭게 변경** - 목록에서 드래그로 순서 조정
+            - **개별 삭제** - 각 항목 우측 X 버튼으로 삭제
+            - **구분 슬라이드 자동 삽입** - 파일과 파일 사이에 검정 슬라이드 자동 추가
+            - **저장 위치 직접 선택** - 병합 시 원하는 경로에 저장
 
             ---
 
-            ### 📥 설치 방법
+            ### 설치 방법
 
             | 운영체제 | 파일 | 방법 |
             |----------|------|------|
