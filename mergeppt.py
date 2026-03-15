@@ -440,6 +440,31 @@ class PPTMergerApp(QWidget):
 
 if __name__ == '__main__':
     app = QApplication(sys.argv)
+    app.setStyleSheet("""
+        QMessageBox {
+            background-color: #2e2e42;
+        }
+        QMessageBox QLabel {
+            color: #e8e8f0;
+            font-size: 14px;
+        }
+        QMessageBox QPushButton {
+            color: #e8e8f0;
+            background-color: #3a3a55;
+            border: 1px solid #55558a;
+            border-radius: 6px;
+            padding: 6px 18px;
+            font-size: 13px;
+            min-width: 72px;
+        }
+        QMessageBox QPushButton:hover {
+            background-color: #4a4a70;
+            border-color: #7777bb;
+        }
+        QMessageBox QPushButton:pressed {
+            background-color: #252540;
+        }
+    """)
     ex = PPTMergerApp()
     ex.show()
     sys.exit(app.exec())
