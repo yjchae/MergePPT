@@ -94,10 +94,7 @@ class SearchResultsListWidget(QListWidget):
 
 # ── 백그라운드 파일 검색 스레드 ────────────────────────────────────────────
 class FileSearchWorker(QThread):
-    # match_type: 'name' | 'content'
-    partial_results = Signal(list)   # 1단계: 파일명 일치 결과 (빠르게)
-    results_ready   = Signal(list)   # 2단계: 내용 검색까지 완료된 최종 결과
-    progress_msg    = Signal(str)    # 진행 상태 메시지
+    results_ready = Signal(list)   # list of (rel, full)
 
     def __init__(self, parent=None):
         super().__init__(parent)
@@ -117,11 +114,9 @@ class FileSearchWorker(QThread):
         self._stop_event.set()
 
     def run(self):
-        q = self._query.lower().strip()
-
-        # ── 1단계: 파일 시스템 탐색 + 파일명 매칭 ──
-        name_results     = []   # (rel, full, 'name')
-        content_pending  = []   # .pptx 파일 중 파일명 미일치 → 내용 검색 후보
+        import unicodedata
+        q = unicodedata.normalize('NFC', self._query).lower().strip()
+        results = []
         try:
             for dirpath, dirnames, filenames in os.walk(self._root):
                 if self._stop_event.is_set():
@@ -131,58 +126,18 @@ class FileSearchWorker(QThread):
                     if self._stop_event.is_set():
                         return
                     if fn.lower().endswith(('.ppt', '.pptx')):
-                        full = os.path.join(dirpath, fn)
-                        rel  = os.path.relpath(full, self._root)
-                        if not q or q in fn.lower():
-                            name_results.append((rel, full, 'name'))
-                        elif fn.lower().endswith('.pptx'):
-                            content_pending.append((rel, full))
+                        fn_nfc = unicodedata.normalize('NFC', fn).lower()
+                        if not q or q in fn_nfc:
+                            full = os.path.join(dirpath, fn)
+                            rel  = os.path.relpath(full, self._root)
+                            results.append((rel, full))
         except Exception:
             pass
 
         if self._stop_event.is_set():
             return
 
-        # 파일명 결과 먼저 바로 전달
-        sorted_name = sorted(name_results, key=lambda x: x[0].lower())
-        self.partial_results.emit(sorted_name)
-
-        # ── 2단계: 내용 검색 (쿼리가 있을 때만) ──
-        content_results = []
-        if q and content_pending:
-            total = len(content_pending)
-            for i, (rel, full) in enumerate(content_pending, 1):
-                if self._stop_event.is_set():
-                    return
-                self.progress_msg.emit(f"내용 검색 중... ({i}/{total})")
-                if self._search_pptx_content(full, q, self._stop_event):
-                    content_results.append((rel, full, 'content'))
-
-        if self._stop_event.is_set():
-            return
-
-        all_results = sorted_name + sorted(content_results, key=lambda x: x[0].lower())
-        self.results_ready.emit(all_results)
-
-    @staticmethod
-    def _search_pptx_content(path, query, stop_event):
-        """슬라이드 텍스트에 query가 포함되어 있으면 True 반환."""
-        try:
-            from pptx import Presentation
-            prs = Presentation(path)
-            for slide in prs.slides:
-                if stop_event.is_set():
-                    return False
-                for shape in slide.shapes:
-                    if not shape.has_text_frame:
-                        continue
-                    for para in shape.text_frame.paragraphs:
-                        text = ''.join(run.text for run in para.runs).lower()
-                        if query in text:
-                            return True
-        except Exception:
-            pass
-        return False
+        self.results_ready.emit(sorted(results, key=lambda x: x[0].lower()))
 
 
 # ── 아이템 델리게이트 (병합 리스트용) ─────────────────────────────────────
@@ -299,11 +254,7 @@ class PPTMergerApp(QWidget):
         self._search_timer.setInterval(350)
         self._search_timer.timeout.connect(self._do_search)
         self._search_worker = FileSearchWorker(self)
-        self._search_worker.partial_results.connect(self._on_partial_results)
         self._search_worker.results_ready.connect(self._on_search_results)
-        self._search_worker.progress_msg.connect(
-            lambda msg: self.resultCountLabel.setText(msg) if hasattr(self, 'resultCountLabel') else None
-        )
         self.initUI()
 
     def initUI(self):
@@ -313,17 +264,19 @@ class PPTMergerApp(QWidget):
         self.setStyleSheet("background-color: #1e1e2e;")
 
         root = QVBoxLayout(self)
-        root.setContentsMargins(12, 10, 12, 12)
-        root.setSpacing(6)
+        root.setContentsMargins(12, 6, 12, 10)
+        root.setSpacing(4)
 
         # 제목 + 힌트를 한 줄로
         header_row = QHBoxLayout()
-        header_row.setSpacing(12)
+        header_row.setSpacing(10)
         title = QLabel("PPT 병합기")
-        title.setStyleSheet("color: #c0c0d8; font-size: 13px; font-weight: bold;")
+        title.setStyleSheet("color: #c0c0d8; font-size: 12px; font-weight: bold;")
+        title.setFixedHeight(20)
         header_row.addWidget(title)
         hint = QLabel("드래그 앤 드롭  •  순서 드래그로 변경  •  우측 검색 결과 드래그하여 추가")
-        hint.setStyleSheet("color: #555; font-size: 11px;")
+        hint.setStyleSheet("color: #444; font-size: 10px;")
+        hint.setFixedHeight(20)
         header_row.addWidget(hint, 1)
         root.addLayout(header_row)
 
@@ -501,7 +454,7 @@ class PPTMergerApp(QWidget):
         self.searchList.itemDoubleClicked.connect(self._on_search_item_double_clicked)
         right_layout.addWidget(self.searchList, 1)
 
-        drag_hint = QLabel("← 드래그하여 추가  |  더블클릭으로 추가  |  초록색 = 내용 일치")
+        drag_hint = QLabel("← 드래그하여 추가  |  더블클릭으로 추가")
         drag_hint.setAlignment(Qt.AlignCenter)
         drag_hint.setStyleSheet(
             "color: #4a4a6a; font-size: 10px; background: transparent; border: none;"
@@ -512,7 +465,7 @@ class PPTMergerApp(QWidget):
         splitter.setSizes([640, 420])
         splitter.setCollapsible(1, False)
 
-        root.addWidget(splitter)
+        root.addWidget(splitter, 1)
 
     # ── 스타일 헬퍼 ──────────────────────────────────────────────────────
     @staticmethod
@@ -550,43 +503,16 @@ class PPTMergerApp(QWidget):
         self.resultCountLabel.setText("검색 중...")
         self._search_worker.start_search(root, self.searchInput.text().strip())
 
-    def _populate_search_list(self, results):
-        """results: list of (rel, full, match_type)"""
-        self.searchList.clear()
-        for rel, full, match_type in results:
-            label = f"[내용]  {rel}" if match_type == 'content' else rel
-            item = QListWidgetItem(label)
-            item.setData(Qt.UserRole, full)
-            item.setToolTip(f"{'내용 일치' if match_type == 'content' else '파일명 일치'}\n{full}")
-            if match_type == 'content':
-                item.setForeground(QColor("#7ddd88"))
-            self.searchList.addItem(item)
-
-    def _on_partial_results(self, results):
-        """1단계: 파일명 일치 결과 즉시 표시 + 내용 검색 예고"""
-        self._populate_search_list(results)
-        n = len(results)
-        q = self.searchInput.text().strip()
-        if q:
-            self.resultCountLabel.setText(
-                f"파일명 일치: {n}개  |  내용 검색 중..."
-            )
-        else:
-            self.resultCountLabel.setText(f"검색 결과: {n}개")
-
     def _on_search_results(self, results):
-        """2단계: 내용 검색까지 완료된 최종 결과"""
-        self._populate_search_list(results)
-        n_name    = sum(1 for _, _, t in results if t == 'name')
-        n_content = sum(1 for _, _, t in results if t == 'content')
-        if not results:
-            self.resultCountLabel.setText("검색 결과: 없음")
-        elif n_content:
-            self.resultCountLabel.setText(
-                f"총 {len(results)}개  (파일명: {n_name}개  +  내용: {n_content}개)"
-            )
-        else:
-            self.resultCountLabel.setText(f"검색 결과: {n_name}개")
+        """results: list of (rel, full)"""
+        self.searchList.clear()
+        for rel, full in results:
+            item = QListWidgetItem(rel)
+            item.setData(Qt.UserRole, full)
+            item.setToolTip(full)
+            self.searchList.addItem(item)
+        n = len(results)
+        self.resultCountLabel.setText("검색 결과: 없음" if not n else f"검색 결과: {n}개")
 
     def _on_search_item_double_clicked(self, item):
         path = item.data(Qt.UserRole)
@@ -662,6 +588,8 @@ class PPTMergerApp(QWidget):
             merged.save(merged_file_path)
             QMessageBox.information(self, "성공",
                 f"병합 완료!\n'{merged_file_path}' 에 저장되었습니다.")
+            from PySide6.QtGui import QDesktopServices
+            QDesktopServices.openUrl(QUrl.fromLocalFile(merged_file_path))
         except Exception as e:
             QMessageBox.critical(self, "병합 실패", f"오류가 발생했습니다:\n{str(e)}")
         finally:
@@ -679,7 +607,10 @@ class PPTMergerApp(QWidget):
             if sys.platform == 'darwin':
                 return os.path.join(base, 'LibreOffice.app', 'Contents', 'MacOS', 'soffice')
             else:
-                return os.path.join(base, 'LibreOffice', 'program', 'soffice.exe')
+                bundled = os.path.join(base, 'LibreOffice', 'program', 'soffice.exe')
+                if os.path.isfile(bundled):
+                    return bundled
+                # bundled 경로에 없으면 시스템 설치 경로로 fallback
         if sys.platform == 'darwin':
             p = '/Applications/LibreOffice.app/Contents/MacOS/soffice'
             return p if os.path.exists(p) else (shutil.which('soffice') or p)
@@ -742,36 +673,38 @@ class PPTMergerApp(QWidget):
         for p in file_paths:
             if p.lower().endswith('.ppt'):
                 base = os.path.splitext(os.path.basename(p))[0]
-                result.append(os.path.join(tmp_dir, base + '.pptx'))
+                converted_path = os.path.join(tmp_dir, base + '.pptx')
+                self._strip_slide_backgrounds(converted_path)
+                result.append(converted_path)
             else:
                 result.append(p)
         return result
 
-    # ── 슬라이드 복사 ──────────────────────────────────────────────────────
-    _MEDIA_RELTYPES = {
-        'http://schemas.openxmlformats.org/officeDocument/2006/relationships/image',
-        'http://schemas.openxmlformats.org/officeDocument/2006/relationships/media',
-        'http://schemas.openxmlformats.org/officeDocument/2006/relationships/audio',
-        'http://schemas.openxmlformats.org/officeDocument/2006/relationships/video',
+    # 복사 시 destination이 자체 관리하는 관계 타입 — 건너뜀
+    _SKIP_RELTYPES = {
+        'http://schemas.openxmlformats.org/officeDocument/2006/relationships/slideLayout',
+        'http://schemas.openxmlformats.org/officeDocument/2006/relationships/notesSlide',
     }
 
     def _copy_slide(self, dest_prs, src_slide):
         blank = dest_prs.slide_layouts[min(6, len(dest_prs.slide_layouts) - 1)]
         dest_slide = dest_prs.slides.add_slide(blank)
 
+        # slideLayout/notesSlide 제외한 모든 관계 복사
         rId_map = {}
         for rel_id, rel in src_slide.part.rels.items():
-            if rel.is_external:
-                try:
-                    rId_map[rel_id] = dest_slide.part.relate_to(rel.target_ref, rel.reltype, is_external=True)
-                except Exception:
-                    pass
-            elif rel.reltype in self._MEDIA_RELTYPES:
-                try:
-                    rId_map[rel_id] = dest_slide.part.relate_to(rel.target_part, rel.reltype)
-                except Exception:
-                    pass
+            if rel.reltype in self._SKIP_RELTYPES:
+                continue
+            try:
+                if rel.is_external:
+                    new_rid = dest_slide.part.relate_to(rel.target_ref, rel.reltype, is_external=True)
+                else:
+                    new_rid = dest_slide.part.relate_to(rel.target_part, rel.reltype)
+                rId_map[rel_id] = new_rid
+            except Exception:
+                pass
 
+        # 도형 트리 교체
         src_tree  = src_slide.shapes._spTree
         dest_tree = dest_slide.shapes._spTree
         for child in list(dest_tree):
@@ -779,6 +712,7 @@ class PPTMergerApp(QWidget):
         for child in src_tree:
             dest_tree.append(copy.deepcopy(child))
 
+        # r:id 매핑 반영
         if rId_map:
             xml = etree.tostring(dest_tree, encoding='unicode')
             for old, new in rId_map.items():
@@ -790,6 +724,7 @@ class PPTMergerApp(QWidget):
 
         self._reassign_ids(dest_slide)
 
+        # 명시적 배경 복사
         ns = 'http://schemas.openxmlformats.org/presentationml/2006/main'
         src_cSld  = src_slide._element.find(f'{{{ns}}}cSld')
         dest_cSld = dest_slide._element.find(f'{{{ns}}}cSld')
@@ -801,19 +736,41 @@ class PPTMergerApp(QWidget):
                     dest_cSld.remove(dest_bg)
                 dest_cSld.insert(0, copy.deepcopy(src_bg))
 
+    @staticmethod
+    def _strip_slide_backgrounds(pptx_path):
+        """변환된 .ppt 파일의 각 슬라이드에서 명시적 배경(<p:bg>)을 제거해
+        병합 후 첫 번째 파일의 테마를 상속받도록 한다."""
+        ns = 'http://schemas.openxmlformats.org/presentationml/2006/main'
+        prs = Presentation(pptx_path)
+        for slide in prs.slides:
+            cSld = slide._element.find(f'{{{ns}}}cSld')
+            if cSld is not None:
+                bg = cSld.find(f'{{{ns}}}bg')
+                if bg is not None:
+                    cSld.remove(bg)
+        prs.save(pptx_path)
+
     def _add_black_slide(self, prs):
         slide = prs.slides.add_slide(prs.slide_layouts[min(6, len(prs.slide_layouts) - 1)])
         ns_p = 'http://schemas.openxmlformats.org/presentationml/2006/main'
         ns_a = 'http://schemas.openxmlformats.org/drawingml/2006/main'
+
+        # nvGrpSpPr / grpSpPr 구조 요소는 유지하고 도형 내용만 제거
+        sp_tree = slide.shapes._spTree
+        keep = {f'{{{ns_p}}}nvGrpSpPr', f'{{{ns_p}}}grpSpPr'}
+        for child in list(sp_tree):
+            if child.tag not in keep:
+                sp_tree.remove(child)
+
+        cSld = slide._element.find(f'{{{ns_p}}}cSld')
+        existing = cSld.find(f'{{{ns_p}}}bg')
+        if existing is not None:
+            cSld.remove(existing)
         bg_xml = (
             f'<p:bg xmlns:p="{ns_p}" xmlns:a="{ns_a}">'
             '<p:bgPr><a:solidFill><a:srgbClr val="000000"/></a:solidFill>'
             '<a:effectLst/></p:bgPr></p:bg>'
         )
-        cSld = slide._element.find(f'{{{ns_p}}}cSld')
-        existing = cSld.find(f'{{{ns_p}}}bg')
-        if existing is not None:
-            cSld.remove(existing)
         cSld.insert(0, etree.fromstring(bg_xml))
 
     def _reassign_ids(self, slide):
@@ -831,6 +788,7 @@ class PPTMergerApp(QWidget):
 
 if __name__ == '__main__':
     app = QApplication(sys.argv)
+    app.setStyle('Fusion')
     app.setStyleSheet("""
         QMessageBox {
             background-color: #2e2e42;
