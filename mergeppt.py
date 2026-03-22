@@ -1,14 +1,17 @@
 import sys, os, uuid, copy, random, subprocess, tempfile, threading
 from pptx import Presentation
+from pptx.dml.color import RGBColor
 from lxml import etree
 from PySide6.QtWidgets import (
     QApplication, QWidget, QVBoxLayout, QHBoxLayout,
     QListWidget, QListWidgetItem, QPushButton, QMessageBox, QFileDialog,
-    QStyledItemDelegate, QStyle, QLabel, QLineEdit, QSplitter, QFrame
+    QStyledItemDelegate, QStyle, QLabel, QLineEdit, QSplitter, QFrame,
+    QColorDialog, QSpinBox, QCheckBox
 )
 from PySide6.QtCore import Qt, QSize, QRect, QRectF, QEvent, Signal, QUrl, QThread, QTimer
 from PySide6.QtGui import (
-    QPainter, QColor, QFont, QBrush, QPen, QFontMetrics, QPainterPath, QDrag
+    QPainter, QColor, QFont, QBrush, QPen, QFontMetrics, QPainterPath, QDrag,
+    QDesktopServices
 )
 from PySide6.QtCore import QMimeData
 
@@ -249,6 +252,11 @@ class PPTItemDelegate(QStyledItemDelegate):
 class PPTMergerApp(QWidget):
     def __init__(self):
         super().__init__()
+        self.bg_color    = QColor("#000000")  # 기본 배경색: 검정
+        self.text_color  = QColor("#FFFFFF")  # 기본 글자색: 흰색
+        self.slide_ratio = "16:9"             # 기본 슬라이드 비율
+        self.text_valign = "top"              # 텍스트 세로 위치: top/center/bottom
+        self.text_margin_pt = 20              # 텍스트 여백 (pt 단위)
         self._search_timer  = QTimer(self)
         self._search_timer.setSingleShot(True)
         self._search_timer.setInterval(350)
@@ -314,6 +322,135 @@ class PPTMergerApp(QWidget):
             lambda: self.listWidget.viewport().update()
         )
         left_layout.addWidget(self.listWidget)
+
+        # ── 슬라이드 설정 행 (배경색 + 비율) ──
+        settings_row = QHBoxLayout()
+        settings_row.setSpacing(8)
+
+        bg_lbl = QLabel("배경색:")
+        bg_lbl.setStyleSheet("color: #888; font-size: 11px;")
+        settings_row.addWidget(bg_lbl)
+
+        self.bgColorBtn = QPushButton()
+        self.bgColorBtn.setFixedSize(40, 28)
+        self.bgColorBtn.setCursor(Qt.PointingHandCursor)
+        self.bgColorBtn.setToolTip("클릭하여 배경색 선택")
+        self.bgColorBtn.clicked.connect(self._pick_bg_color)
+        self._update_bg_btn_style()
+        settings_row.addWidget(self.bgColorBtn)
+
+        settings_row.addSpacing(8)
+
+        text_lbl = QLabel("글자색:")
+        text_lbl.setStyleSheet("color: #888; font-size: 11px;")
+        settings_row.addWidget(text_lbl)
+
+        self.textColorBtn = QPushButton()
+        self.textColorBtn.setFixedSize(40, 28)
+        self.textColorBtn.setCursor(Qt.PointingHandCursor)
+        self.textColorBtn.setToolTip("클릭하여 글자색 선택")
+        self.textColorBtn.clicked.connect(self._pick_text_color)
+        self._update_text_btn_style()
+        settings_row.addWidget(self.textColorBtn)
+
+        self.textColorChk = QCheckBox("일괄 적용")
+        self.textColorChk.setChecked(False)  # 기본: 원본 색상 유지
+        self.textColorChk.setToolTip("체크 시 선택한 글자색을 모든 텍스트에 적용\n미체크 시 원본 색상 유지")
+        self.textColorChk.setStyleSheet("""
+            QCheckBox { color: #888; font-size: 11px; spacing: 4px; }
+            QCheckBox::indicator {
+                width: 14px; height: 14px;
+                border: 1px solid #44445a; border-radius: 3px;
+                background: #1e1e2e;
+            }
+            QCheckBox::indicator:checked {
+                background: #0063cc; border-color: #0063cc;
+            }
+            QCheckBox:hover { color: #ccc; }
+        """)
+        settings_row.addWidget(self.textColorChk)
+
+        settings_row.addSpacing(16)
+
+        ratio_lbl = QLabel("슬라이드 비율:")
+        ratio_lbl.setStyleSheet("color: #888; font-size: 11px;")
+        settings_row.addWidget(ratio_lbl)
+
+        self.btn_ratio_169 = QPushButton("16:9")
+        self.btn_ratio_169.setFixedSize(52, 28)
+        self.btn_ratio_169.setCursor(Qt.PointingHandCursor)
+        self.btn_ratio_169.clicked.connect(lambda: self._set_ratio("16:9"))
+        settings_row.addWidget(self.btn_ratio_169)
+
+        self.btn_ratio_43 = QPushButton("4:3")
+        self.btn_ratio_43.setFixedSize(52, 28)
+        self.btn_ratio_43.setCursor(Qt.PointingHandCursor)
+        self.btn_ratio_43.clicked.connect(lambda: self._set_ratio("4:3"))
+        settings_row.addWidget(self.btn_ratio_43)
+
+        settings_row.addStretch(1)
+        self._update_ratio_btn_styles()
+        left_layout.addLayout(settings_row)
+
+        # ── 텍스트 위치 설정 행 ──
+        pos_row = QHBoxLayout()
+        pos_row.setSpacing(8)
+
+        pos_lbl = QLabel("텍스트 위치:")
+        pos_lbl.setStyleSheet("color: #888; font-size: 11px;")
+        pos_row.addWidget(pos_lbl)
+
+        self.btn_valign_top = QPushButton("상단")
+        self.btn_valign_top.setFixedSize(52, 28)
+        self.btn_valign_top.setCursor(Qt.PointingHandCursor)
+        self.btn_valign_top.clicked.connect(lambda: self._set_valign("top"))
+        pos_row.addWidget(self.btn_valign_top)
+
+        self.btn_valign_center = QPushButton("가운데")
+        self.btn_valign_center.setFixedSize(60, 28)
+        self.btn_valign_center.setCursor(Qt.PointingHandCursor)
+        self.btn_valign_center.clicked.connect(lambda: self._set_valign("center"))
+        pos_row.addWidget(self.btn_valign_center)
+
+        self.btn_valign_bottom = QPushButton("하단")
+        self.btn_valign_bottom.setFixedSize(52, 28)
+        self.btn_valign_bottom.setCursor(Qt.PointingHandCursor)
+        self.btn_valign_bottom.clicked.connect(lambda: self._set_valign("bottom"))
+        pos_row.addWidget(self.btn_valign_bottom)
+
+        pos_row.addSpacing(16)
+
+        margin_lbl = QLabel("여백:")
+        margin_lbl.setStyleSheet("color: #888; font-size: 11px;")
+        pos_row.addWidget(margin_lbl)
+
+        self.marginSpinBox = QSpinBox()
+        self.marginSpinBox.setRange(0, 300)
+        self.marginSpinBox.setValue(self.text_margin_pt)
+        self.marginSpinBox.setSuffix(" pt")
+        self.marginSpinBox.setFixedSize(76, 28)
+        self.marginSpinBox.setStyleSheet("""
+            QSpinBox {
+                color: #e0e0f0; background: #1e1e2e;
+                border: 1px solid #44445a; border-radius: 6px;
+                padding: 2px 6px; font-size: 12px;
+            }
+            QSpinBox:focus { border-color: #5555aa; }
+            QSpinBox::up-button, QSpinBox::down-button {
+                width: 16px; background: #2e2e42; border: none;
+            }
+            QSpinBox::up-button:hover, QSpinBox::down-button:hover {
+                background: #3a3a55;
+            }
+        """)
+        self.marginSpinBox.valueChanged.connect(
+            lambda v: setattr(self, 'text_margin_pt', v)
+        )
+        pos_row.addWidget(self.marginSpinBox)
+
+        pos_row.addStretch(1)
+        self._update_valign_btn_styles()
+        left_layout.addLayout(pos_row)
 
         # 하단 버튼
         btn_row = QHBoxLayout()
@@ -482,6 +619,85 @@ class PPTMergerApp(QWidget):
             QLineEdit:focus { border-color: #5555aa; }
         """
 
+    # ── 배경색 / 비율 UI 헬퍼 ─────────────────────────────────────────────
+    def _update_bg_btn_style(self):
+        hex_col = self.bg_color.name()  # e.g. "#ffffff"
+        # 밝은 색이면 테두리를 회색으로, 어두운 색이면 그 색상 계열로
+        border = "#44445a" if self.bg_color.lightness() > 128 else self.bg_color.lighter(150).name()
+        self.bgColorBtn.setStyleSheet(
+            f"QPushButton {{ background: {hex_col}; border: 2px solid {border};"
+            f" border-radius: 6px; }}"
+            f"QPushButton:hover {{ border-color: #5555aa; }}"
+        )
+
+    def _pick_bg_color(self):
+        color = QColorDialog.getColor(self.bg_color, self, "배경색 선택")
+        if color.isValid():
+            self.bg_color = color
+            self._update_bg_btn_style()
+
+    def _update_text_btn_style(self):
+        hex_col = self.text_color.name()
+        # 배경은 흰색, 글자색 견본을 원형으로 표시
+        self.textColorBtn.setStyleSheet(
+            f"QPushButton {{ background: #2e2e42; border: 2px solid #44445a;"
+            f" border-radius: 6px; }}"
+            f"QPushButton::after {{ }}"  # placeholder
+            f"QPushButton:hover {{ border-color: #5555aa; }}"
+        )
+        # 버튼 텍스트에 색상 견본(■) 표시
+        self.textColorBtn.setText("■")
+        self.textColorBtn.setStyleSheet(
+            f"QPushButton {{ color: {hex_col}; background: #2e2e42;"
+            f" border: 2px solid #44445a; border-radius: 6px;"
+            f" font-size: 18px; }}"
+            f"QPushButton:hover {{ border-color: #5555aa; }}"
+        )
+
+    def _pick_text_color(self):
+        color = QColorDialog.getColor(self.text_color, self, "글자색 선택")
+        if color.isValid():
+            self.text_color = color
+            self._update_text_btn_style()
+
+    def _set_valign(self, valign: str):
+        self.text_valign = valign
+        self._update_valign_btn_styles()
+
+    def _update_valign_btn_styles(self):
+        active = (
+            "QPushButton { color: #fff; background: #0063cc;"
+            " border: none; border-radius: 6px; font-size: 12px; font-weight: bold; }"
+        )
+        inactive = (
+            "QPushButton { color: #aaa; background: #2e2e42;"
+            " border: 1px solid #44445a; border-radius: 6px; font-size: 12px; }"
+            "QPushButton:hover { color: #fff; background: #3a3a55; }"
+        )
+        self.btn_valign_top.setStyleSheet(
+            active if self.text_valign == "top" else inactive)
+        self.btn_valign_center.setStyleSheet(
+            active if self.text_valign == "center" else inactive)
+        self.btn_valign_bottom.setStyleSheet(
+            active if self.text_valign == "bottom" else inactive)
+
+    def _set_ratio(self, ratio: str):
+        self.slide_ratio = ratio
+        self._update_ratio_btn_styles()
+
+    def _update_ratio_btn_styles(self):
+        active = (
+            "QPushButton { color: #fff; background: #0063cc;"
+            " border: none; border-radius: 6px; font-size: 12px; font-weight: bold; }"
+        )
+        inactive = (
+            "QPushButton { color: #aaa; background: #2e2e42;"
+            " border: 1px solid #44445a; border-radius: 6px; font-size: 12px; }"
+            "QPushButton:hover { color: #fff; background: #3a3a55; }"
+        )
+        self.btn_ratio_169.setStyleSheet(active if self.slide_ratio == "16:9" else inactive)
+        self.btn_ratio_43.setStyleSheet(active if self.slide_ratio == "4:3" else inactive)
+
     # ── 폴더 탐색 ─────────────────────────────────────────────────────────
     def _browse_folder(self):
         folder = QFileDialog.getExistingDirectory(self, "검색 폴더 선택")
@@ -580,15 +796,43 @@ class PPTMergerApp(QWidget):
 
             merged = Presentation(converted[0])
             for src_path in converted[1:]:
-                self._add_black_slide(merged)
+                self._add_divider_slide(merged, self.bg_color)
                 src_prs = Presentation(src_path)
                 for slide in src_prs.slides:
                     self._copy_slide(merged, slide)
 
+            # 슬라이드 크기 설정
+            if self.slide_ratio == "16:9":
+                merged.slide_width  = 12192000
+                merged.slide_height = 6858000
+            else:  # 4:3
+                merged.slide_width  = 9144000
+                merged.slide_height = 6858000
+
+            slide_w = merged.slide_width
+            slide_h = merged.slide_height
+
+            # 슬라이드 마스터 / 레이아웃 이미지 제거 (근본 원인 차단)
+            self._clean_slide_masters(merged)
+
+            margin_emu = self.text_margin_pt * 12700  # pt → EMU
+
+            # 전체 슬라이드 후처리
+            for slide in merged.slides:
+                self._remove_background_pictures(slide)
+                self._fit_text_shapes(
+                    slide, slide_w, slide_h, self.text_valign, margin_emu
+                )
+
+            # 배경색 적용
+            self._apply_background_to_all_slides(merged, self.bg_color)
+            # 글자색: 체크박스 선택 시에만 일괄 적용, 미선택 시 원본 유지
+            if self.textColorChk.isChecked():
+                self._apply_text_color_to_all_slides(merged, self.text_color)
+
             merged.save(merged_file_path)
             QMessageBox.information(self, "성공",
                 f"병합 완료!\n'{merged_file_path}' 에 저장되었습니다.")
-            from PySide6.QtGui import QDesktopServices
             QDesktopServices.openUrl(QUrl.fromLocalFile(merged_file_path))
         except Exception as e:
             QMessageBox.critical(self, "병합 실패", f"오류가 발생했습니다:\n{str(e)}")
@@ -724,18 +968,6 @@ class PPTMergerApp(QWidget):
 
         self._reassign_ids(dest_slide)
 
-        # 명시적 배경 복사
-        ns = 'http://schemas.openxmlformats.org/presentationml/2006/main'
-        src_cSld  = src_slide._element.find(f'{{{ns}}}cSld')
-        dest_cSld = dest_slide._element.find(f'{{{ns}}}cSld')
-        if src_cSld is not None and dest_cSld is not None:
-            src_bg = src_cSld.find(f'{{{ns}}}bg')
-            if src_bg is not None:
-                dest_bg = dest_cSld.find(f'{{{ns}}}bg')
-                if dest_bg is not None:
-                    dest_cSld.remove(dest_bg)
-                dest_cSld.insert(0, copy.deepcopy(src_bg))
-
     @staticmethod
     def _strip_slide_backgrounds(pptx_path):
         """변환된 .ppt 파일의 각 슬라이드에서 명시적 배경(<p:bg>)을 제거해
@@ -750,26 +982,27 @@ class PPTMergerApp(QWidget):
                     cSld.remove(bg)
         prs.save(pptx_path)
 
-    def _add_black_slide(self, prs):
+    def _add_divider_slide(self, prs, color: QColor):
+        """파일 사이 구분 슬라이드 삽입 — 선택한 배경색으로 채움."""
         slide = prs.slides.add_slide(prs.slide_layouts[min(6, len(prs.slide_layouts) - 1)])
         ns_p = 'http://schemas.openxmlformats.org/presentationml/2006/main'
         ns_a = 'http://schemas.openxmlformats.org/drawingml/2006/main'
 
-        # nvGrpSpPr / grpSpPr 구조 요소는 유지하고 도형 내용만 제거
         sp_tree = slide.shapes._spTree
         keep = {f'{{{ns_p}}}nvGrpSpPr', f'{{{ns_p}}}grpSpPr'}
         for child in list(sp_tree):
             if child.tag not in keep:
                 sp_tree.remove(child)
 
+        hex_color = f"{color.red():02X}{color.green():02X}{color.blue():02X}"
         cSld = slide._element.find(f'{{{ns_p}}}cSld')
         existing = cSld.find(f'{{{ns_p}}}bg')
         if existing is not None:
             cSld.remove(existing)
         bg_xml = (
             f'<p:bg xmlns:p="{ns_p}" xmlns:a="{ns_a}">'
-            '<p:bgPr><a:solidFill><a:srgbClr val="000000"/></a:solidFill>'
-            '<a:effectLst/></p:bgPr></p:bg>'
+            f'<p:bgPr><a:solidFill><a:srgbClr val="{hex_color}"/></a:solidFill>'
+            f'<a:effectLst/></p:bgPr></p:bg>'
         )
         cSld.insert(0, etree.fromstring(bg_xml))
 
@@ -784,6 +1017,143 @@ class PPTMergerApp(QWidget):
                 elem.set('paraId', format(random.randint(0x10000000, 0x7FFFFFFF), '08X'))
             if 'textId' in elem.attrib:
                 elem.set('textId', format(random.randint(0x10000000, 0x7FFFFFFF), '08X'))
+
+    def _apply_background_to_all_slides(self, prs, color: QColor):
+        """모든 슬라이드에 단색 배경을 일괄 적용."""
+        ns_p = 'http://schemas.openxmlformats.org/presentationml/2006/main'
+        ns_a = 'http://schemas.openxmlformats.org/drawingml/2006/main'
+        hex_color = f"{color.red():02X}{color.green():02X}{color.blue():02X}"
+        bg_xml = (
+            f'<p:bg xmlns:p="{ns_p}" xmlns:a="{ns_a}">'
+            f'<p:bgPr><a:solidFill><a:srgbClr val="{hex_color}"/></a:solidFill>'
+            f'<a:effectLst/></p:bgPr></p:bg>'
+        )
+        for slide in prs.slides:
+            cSld = slide._element.find(f'{{{ns_p}}}cSld')
+            if cSld is not None:
+                existing = cSld.find(f'{{{ns_p}}}bg')
+                if existing is not None:
+                    cSld.remove(existing)
+                cSld.insert(0, etree.fromstring(bg_xml))
+
+    @staticmethod
+    def _clean_slide_masters(prs):
+        """슬라이드 마스터 및 레이아웃의 spTree에서 이미지 도형을 모두 제거하고
+        마스터 배경(p:bg)도 제거해 선택한 배경색만 표시되도록 한다."""
+        ns_p = 'http://schemas.openxmlformats.org/presentationml/2006/main'
+        ns_a = 'http://schemas.openxmlformats.org/drawingml/2006/main'
+
+        removable = {f'{{{ns_p}}}pic', f'{{{ns_p}}}sp', f'{{{ns_p}}}grpSp'}
+        blip_tags = (f'{{{ns_a}}}blipFill', f'{{{ns_p}}}blipFill')
+        text_tag  = f'{{{ns_a}}}t'
+
+        def _strip_images(sp_tree):
+            to_remove = [
+                child for child in list(sp_tree)
+                if child.tag in removable
+                and any(child.find(f'.//{t}') is not None for t in blip_tags)
+                and child.find(f'.//{text_tag}') is None
+            ]
+            for el in to_remove:
+                sp_tree.remove(el)
+
+        def _strip_bg(element):
+            """cSld 안의 p:bg 요소 제거 (마스터/레이아웃 배경 이미지 차단)."""
+            cSld = element.find(f'{{{ns_p}}}cSld')
+            if cSld is not None:
+                bg = cSld.find(f'{{{ns_p}}}bg')
+                if bg is not None:
+                    cSld.remove(bg)
+
+        for master in prs.slide_masters:
+            _strip_images(master.shapes._spTree)
+            _strip_bg(master._element)
+            for layout in master.slide_layouts:
+                _strip_images(layout.shapes._spTree)
+                _strip_bg(layout._element)
+
+    @staticmethod
+    def _remove_background_pictures(slide):
+        """이미지 데이터(blipFill)가 있고 텍스트(a:t)가 없는 도형을
+        배경 이미지로 판단해 제거. p:pic / p:sp / p:grpSp 모두 처리."""
+        ns_p = 'http://schemas.openxmlformats.org/presentationml/2006/main'
+        ns_a = 'http://schemas.openxmlformats.org/drawingml/2006/main'
+
+        removable = {
+            f'{{{ns_p}}}pic',
+            f'{{{ns_p}}}sp',
+            f'{{{ns_p}}}grpSp',
+        }
+        blip_tags = (f'{{{ns_a}}}blipFill', f'{{{ns_p}}}blipFill')
+        text_tag  = f'{{{ns_a}}}t'
+
+        sp_tree   = slide.shapes._spTree
+        to_remove = []
+        for child in list(sp_tree):
+            if child.tag not in removable:
+                continue
+            has_image = any(child.find(f'.//{t}') is not None for t in blip_tags)
+            has_text  = child.find(f'.//{text_tag}') is not None
+            if has_image and not has_text:
+                to_remove.append(child)
+
+        for el in to_remove:
+            sp_tree.remove(el)
+
+    @staticmethod
+    def _fit_text_shapes(slide, slide_width: int, slide_height: int,
+                         valign: str = "center", margin: int = 0):
+        """슬라이드에서 가장 큰 텍스트 박스(가사)만 위치·정렬을 적용하고,
+        나머지 텍스트 박스는 경계 초과 시에만 보정한다.
+        valign: 'top' | 'center' | 'bottom'
+        margin: 슬라이드 경계와의 거리 (EMU)
+        """
+        text_shapes = [
+            s for s in slide.shapes
+            if s.has_text_frame
+            and all(v is not None for v in (s.left, s.top, s.width, s.height))
+        ]
+        if not text_shapes:
+            return
+
+        # 가장 넓이가 큰 텍스트 박스 = 주요 가사 영역
+        main = max(text_shapes, key=lambda s: int(s.width) * int(s.height))
+
+        for shape in text_shapes:
+            orig_w = int(shape.width)
+            orig_h = int(shape.height)
+            # 크기: 경계 초과 시에만 축소, 절대 키우지 않음
+            w = min(orig_w, slide_width)
+            h = min(orig_h, slide_height)
+
+            if shape is main:
+                # 가장 큰 박스만 좌우 가운데 + valign 적용
+                l = (slide_width - w) // 2
+                if valign == "top":
+                    t = margin
+                elif valign == "bottom":
+                    t = slide_height - h - margin
+                else:  # center
+                    t = (slide_height - h) // 2
+                t = max(0, min(t, slide_height - h))
+                shape.left = l
+                shape.top  = t
+                if w < orig_w:
+                    shape.width  = w
+                if h < orig_h:
+                    shape.height = h
+            # 나머지(제목 등)는 위치·크기 일절 건드리지 않음
+
+    def _apply_text_color_to_all_slides(self, prs, color: QColor):
+        """모든 슬라이드의 텍스트 런(run)에 글자색을 일괄 적용."""
+        rgb = RGBColor(color.red(), color.green(), color.blue())
+        for slide in prs.slides:
+            for shape in slide.shapes:
+                if not shape.has_text_frame:
+                    continue
+                for para in shape.text_frame.paragraphs:
+                    for run in para.runs:
+                        run.font.color.rgb = rgb
 
 
 if __name__ == '__main__':
