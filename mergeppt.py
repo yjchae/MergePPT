@@ -242,7 +242,7 @@ class PPTItemDelegate(QStyledItemDelegate):
     def editorEvent(self, event, model, option, index):
         if event.type() == QEvent.Type.MouseButtonRelease:
             r = option.rect.adjusted(self._M, self._M, -self._M, -self._M)
-            if self._xbtn_rect(r).contains(event.pos()):
+            if self._xbtn_rect(r).contains(event.position().toPoint()):
                 self.delete_requested.emit(index.row())
                 return True
         return super().editorEvent(event, model, option, index)
