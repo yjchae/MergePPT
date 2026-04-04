@@ -909,10 +909,24 @@ class PPTMergerApp(QWidget):
             kwargs = {}
             if sys.platform == 'win32':
                 kwargs['creationflags'] = subprocess.CREATE_NO_WINDOW
-            subprocess.run(
-                [soffice, '--headless', '--convert-to', 'pptx', '--outdir', tmp_dir] + ppt_files,
-                check=True, capture_output=True, **kwargs
-            )
+            # LibreOffice 임시 사용자 프로필 지정 (번들 앱에서 쓰기 권한 문제 방지)
+            lo_profile = os.path.join(tmp_dir, 'lo_profile')
+            os.makedirs(lo_profile, exist_ok=True)
+            cmd = [
+                soffice,
+                f'--env:UserInstallation=file://{lo_profile}',
+                '--headless', '--norestore', '--nofirststartwizard',
+                '--convert-to', 'pptx', '--outdir', tmp_dir,
+            ] + ppt_files
+            result_proc = subprocess.run(cmd, capture_output=True, text=True, **kwargs)
+            if result_proc.returncode != 0:
+                err_detail = (result_proc.stderr or result_proc.stdout or '').strip()
+                raise RuntimeError(
+                    f"LibreOffice 변환 실패 (종료 코드 {result_proc.returncode}).\n\n"
+                    + (f"상세 오류:\n{err_detail}\n\n" if err_detail else "")
+                    + "번들 앱에서 실행 시 터미널에서 아래 명령을 한 번 실행해 보세요:\n"
+                    + f"xattr -cr \"{soffice}\""
+                )
         result = []
         for p in file_paths:
             if p.lower().endswith('.ppt'):
