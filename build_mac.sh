@@ -72,6 +72,42 @@ hdiutil create -volname "PPT병합기" \
     "$DMG_PATH"
 
 echo ""
+
+# ── 5. 코드 서명 (ad-hoc) ─────────────────────────────────────────
+echo "[+] 코드 서명 중..."
+
+# LibreOffice Info.plist 심볼릭 링크 → 실제 파일로 교체
+LO_BUNDLE="$APP_PATH/Contents/Frameworks/LibreOffice.app"
+if [ -d "$LO_BUNDLE" ]; then
+    find "$LO_BUNDLE" -type l | while read symlink; do
+        real=$(readlink -f "$symlink" 2>/dev/null || true)
+        if [ -n "$real" ] && [ -f "$real" ]; then
+            cp -f "$real" "$symlink.tmp" && mv -f "$symlink.tmp" "$symlink"
+        fi
+    done
+    # LibreOffice 내부 바이너리 서명
+    find "$LO_BUNDLE/Contents/MacOS" -type f | while read f; do
+        codesign --force --sign "-" "$f" 2>/dev/null || true
+    done
+    find "$LO_BUNDLE/Contents/Frameworks" -name "*.dylib" -type f | while read f; do
+        codesign --force --sign "-" "$f" 2>/dev/null || true
+    done
+    codesign --force --sign "-" "$LO_BUNDLE" 2>/dev/null || true
+fi
+
+# 앱 전체 서명
+codesign --force --sign "-" "$APP_PATH" 2>&1 | grep -v "replacing existing" || true
+echo "✅ 서명 완료"
+echo ""
+
+# ── 6. DMG 재생성 (서명된 앱으로) ────────────────────────────────
+echo "[재생성] 서명된 앱으로 DMG 갱신 중..."
+hdiutil create -volname "PPT병합기" \
+    -srcfolder "$APP_PATH" \
+    -ov -format UDZO \
+    "$DMG_PATH"
+
+echo ""
 echo "========================================"
 echo " ✅ 빌드 완료!"
 echo "    $DMG_PATH"
